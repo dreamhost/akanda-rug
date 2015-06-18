@@ -390,7 +390,12 @@ class VmManager(object):
                     self.log.debug(
                         'New port %s, %s found, plugging...' % (port.id, mac)
                     )
-                    instance.interface_attach(port.id, None, None)
+                    try:
+                        instance.interface_attach(port.id, None, None)
+                    except:
+                        self.log.exception('Interface attach failed')
+                        self.state = RESTART
+                        return
 
             # For each *extra* mac address on the VM...
             for mac in actual_macs - expected_macs:
@@ -412,7 +417,12 @@ class VmManager(object):
                             'Port %s, %s is detached from ' % (port.id, mac),
                             'the neutron router, unplugging...'
                         ]))
-                        instance.interface_detach(port.id)
+                        try:
+                            instance.interface_detach(port.id)
+                        except:
+                            self.log.exception('Interface detach failed')
+                            self.state = RESTART
+                            return
                         ports_to_delete.append(port)
 
         # The action of attaching/detaching interfaces in Nova happens via the
