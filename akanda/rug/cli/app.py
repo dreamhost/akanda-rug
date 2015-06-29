@@ -31,18 +31,22 @@ class RugController(app.App):
 
     log = logging.getLogger(__name__)
 
-    def __init__(self):
+    def __init__(self, stdout=None):
         dist = pkg_resources.get_distribution('akanda-rug')
         super(RugController, self).__init__(
             description='controller for the Akanda RUG service',
             version=dist.version,
             command_manager=commandmanager.CommandManager('akanda.rug.cli'),
+            stdout=stdout
         )
 
     def initialize_app(self, argv):
         # Quiet logging for some request library
         logging.getLogger('requests').setLevel(logging.WARN)
-        main.register_and_load_opts()
+        try:
+            main.register_and_load_opts()
+        except cfg.ArgsAlreadyParsedError:
+            pass
         # Don't pass argv here because cfg.CONF will intercept the
         # help options and exit.
         cfg.CONF(['--config-file', '/etc/akanda-rug/rug.ini'],
