@@ -201,7 +201,7 @@ class RouterBatchedRebuild(command.Command):
         logging.getLogger('akanda.rug.cli.message').setLevel(logging.ERROR)
         self.cprint("Restarting routers in batches of %s..." % batch, 'blue')
 
-        threads = self.spawn_threads()
+        threads = self.spawn_threads(batch)
 
         for chunk in RouterBatchedRebuild.chunked(
             self.neutron.list_routers()['routers'], batch
@@ -263,13 +263,15 @@ class RouterBatchedRebuild(command.Command):
         for t in threads:
             t.join()
 
-    def spawn_threads(self):
+    def spawn_threads(self, max_threads):
         """
         Spawn a number of worker threads to monitor Neutron routers for
         ALIVEness.
         """
         threads = []
-        for i in range(multiprocessing.cpu_count()):
+        for i in range(
+            min(max_threads, multiprocessing.cpu_count())
+        ):
             t = threading.Thread(
                 target=self.check_alive, args=(self.queue, self.active)
             )
