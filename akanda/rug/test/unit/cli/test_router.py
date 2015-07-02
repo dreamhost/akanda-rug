@@ -61,14 +61,14 @@ class TestRouterBatchedRebuild(FunctionalTest):
 
     @mock.patch.object(router.RouterBatchedRebuild, 'neutron')
     @mock.patch.object(router.RouterBatchedRebuild, 'spawn_threads',
-                       lambda self: [])
+                       lambda self, threads: [])
     def test_no_routers(self, neutron):
         neutron.list_routers.return_value = {'routers': []}
         self.app.run(['--debug', 'batch', 'rebuild'])
         assert "routers to become ACTIVE" not in self.stdout.getvalue()
 
     @mock.patch.object(router.RouterBatchedRebuild, 'spawn_threads',
-                       lambda self: [])
+                       lambda self, threads: [])
     @mock.patch.object(router.RouterBatchedRebuild, 'get_instance', lambda *a:
                        None)
     @mock.patch.object(router.RouterBatchedRebuild, 'neutron')
@@ -88,7 +88,7 @@ class TestRouterBatchedRebuild(FunctionalTest):
         assert rebuild.call_count == 1
 
     @mock.patch.object(router.RouterBatchedRebuild, 'spawn_threads',
-                       lambda self: [])
+                       lambda self, threads: [])
     @mock.patch.object(router.RouterBatchedRebuild, 'get_instance', lambda *a:
                        mock.Mock(image={'id': 'LATEST'}))
     @mock.patch.object(router.RouterBatchedRebuild, 'neutron')
@@ -100,7 +100,7 @@ class TestRouterBatchedRebuild(FunctionalTest):
         assert "Router 123 is already up-to-date" in self.stdout.getvalue()
 
     @mock.patch.object(router.RouterBatchedRebuild, 'spawn_threads',
-                       lambda self: [])
+                       lambda self, threads: [])
     @mock.patch.object(router.RouterBatchedRebuild, 'get_instance', lambda *a:
                        mock.Mock(image={'id': 'OUT-OF-DATE'}))
     @mock.patch.object(router.RouterBatchedRebuild, 'neutron')
