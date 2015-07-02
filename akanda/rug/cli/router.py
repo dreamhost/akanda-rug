@@ -17,17 +17,26 @@
 
 """Commands related to routers.
 """
+from __future__ import print_function
+
 import argparse
+import logging
+import multiprocessing
 import subprocess
 import sys
+import thread
+import threading
+import time
+from collections import namedtuple, deque
 
 from akanda.rug import commands
 from akanda.rug.cli import message
 from akanda.rug.api import nova, quantum
 
+from cliff import command
+from neutronclient.v2_0 import client
 from novaclient import exceptions
 from oslo.config import cfg
-from neutronclient.v2_0 import client
 
 
 class _TenantRouterCmd(message.MessageSending):
@@ -132,6 +141,194 @@ class RouterManage(_TenantRouterCmd):
     """manage a single router"""
 
     _COMMAND = commands.ROUTER_MANAGE
+
+
+class RouterBatchedRebuild(command.Command):
+    """rebuild every akanda router in batches"""
+
+    THREAD_SHUTDOWN = threading.Event()
+    Router = namedtuple('Router', ('id', 'name'))
+
+    queue = deque()
+    active = deque()
+
+    def __init__(self, *args, **kw):
+        logging.getLogger('urllib3').setLevel(logging.ERROR)
+        super(RouterBatchedRebuild, self).__init__(*args, **kw)
+
+    def cprint(self, msg, color='green'):
+        try:
+            import blessed
+            term = blessed.Terminal()
+            print(getattr(term, color)(msg), file=self.app.stdout)
+        except ImportError:
+            print(msg, file=self.app.stdout)
+
+    @property
+    def neutron(self):
+        return client.Client(
+            username=self.app.rug_ini.admin_user,
+            password=self.app.rug_ini.admin_password,
+            tenant_name=self.app.rug_ini.admin_tenant_name,
+            auth_url=self.app.rug_ini.auth_url,
+            auth_strategy=self.app.rug_ini.auth_strategy,
+            region_name=self.app.rug_ini.auth_region,
+        )
+
+    @property
+    def nova(self):
+        return nova.Nova(cfg.CONF)
+
+    def get_instance(self, router):
+        router = RouterBatchedRebuild.Router(
+            id=router['id'], name=router['name']
+        )
+        return self.nova.get_instance(router)
+
+    def get_parser(self, prog_name):
+        p = super(RouterBatchedRebuild, self).get_parser(prog_name)
+        p.add_argument('--batch', action="store", type=int, default=15)
+        return p
+
+    @classmethod
+    def chunked(cls, l, n):
+        for i in xrange(0, len(l), n):
+            yield l[i:i+n]
+
+    def take_action(self, parsed_args):
+        batch = parsed_args.batch
+
+        logging.getLogger('akanda.rug.cli.message').setLevel(logging.ERROR)
+        self.cprint("Restarting routers in batches of %s..." % batch, 'blue')
+
+        threads = self.spawn_threads(batch)
+
+        for chunk in RouterBatchedRebuild.chunked(
+            self.neutron.list_routers()['routers'], batch
+        ):
+            self.queue.clear()
+            self.active.clear()
+            rebooting = []
+            for router in chunk:
+                server = self.get_instance(router)
+                if not server:
+                    self.cprint("No VM found for %s!" % router['id'], 'red')
+                elif self.app.rug_ini.router_image_uuid == server.image['id']:
+                    self.cprint("Router %s is already up-to-date, skipping!"
+                                % router['id'], 'green')
+                    continue
+                self.cprint(
+                    "Rebuilding %s %s..." % (router['id'], router['name']),
+                    'yellow'
+                )
+                rebooting.append(router)
+
+            if not rebooting:
+                continue
+
+            self.queue.extend(rebooting)
+            for router in rebooting:
+                self.app.run(['--debug', 'router', 'rebuild', router['id']])
+
+            total = len(rebooting)
+            self.cprint(
+                "Waiting on %s routers to become ACTIVE....<Ctrl-C to skip>" %
+                total,
+                'blue'
+            )
+            try:
+                while len(self.active) < len(rebooting):
+                    new_total = len(rebooting) - len(self.active)
+                    if total != new_total:
+                        total = new_total
+                        if total:
+                            self.cprint(
+                                "Waiting on %s routers to become "
+                                "ACTIVE....<Ctrl-C to skip>" % total,
+                                'blue'
+                            )
+                            time.sleep(5)
+            except KeyboardInterrupt:
+                try:
+                    self.cprint(
+                        "\nContinuing with next batch of routers...",
+                        'blue'
+                    )
+                    continue
+                except KeyboardInterrupt:
+                    continue
+
+        self.cprint("Waiting on worker threads to finish...", 'yellow')
+        RouterBatchedRebuild.THREAD_SHUTDOWN.set()
+        for t in threads:
+            t.join()
+
+    def spawn_threads(self, max_threads):
+        """
+        Spawn a number of worker threads to monitor Neutron routers for
+        ALIVEness.
+        """
+        threads = []
+        for i in range(
+            min(max_threads, multiprocessing.cpu_count())
+        ):
+            t = threading.Thread(
+                target=self.check_alive, args=(self.queue, self.active)
+            )
+            t.daemon = True
+            t.start()
+            threads.append(t)
+
+        self.cprint('Spawned %d worker threads!' % len(threads), 'blue')
+        return threads
+
+    def check_alive(self, queue, active):
+        """
+        Thread worker that iterates over a queue of routers and waits for the
+        underlying VM to change and become ACTIVE.
+
+        :param queue: a collection of Neutron router dicts
+        :type queue: collections.deque
+        :param active: a thread-safe collections.deque used for tracking
+                       routers which have successfully rebuilt
+        :type active: collections.deque
+        """
+        logging.getLogger('urllib3').setLevel(logging.CRITICAL)
+
+        def pop():
+            router = None
+            while router is None:
+                if RouterBatchedRebuild.THREAD_SHUTDOWN.is_set():
+                    return None, None
+                try:
+                    router = queue.pop()
+                except IndexError:
+                    time.sleep(1)
+            return router, getattr(self.get_instance(router), 'id', None)
+
+        router, old_uuid = pop()
+
+        while router and not RouterBatchedRebuild.THREAD_SHUTDOWN.is_set():
+            router = self.neutron.show_router(
+                router['id']).get('router', {})
+            server = self.get_instance(router)
+            if not server:  # VM exists
+                continue
+            if server.status != 'ACTIVE':  # VM is ACTIVE
+                continue
+            changed = old_uuid != server.id
+            if not changed:  # VM uuid actually changed
+                continue
+            if router['status'] != 'ACTIVE':  # Router is ACTIVE
+                continue
+            self.cprint(
+                "%s is ACTIVE, new VM is %s" % (router['id'], server.id),
+                'green'
+            )
+            active.append(router)
+            router, old_uuid = pop()
+
+        self.cprint('Thread %d is exiting...' % thread.get_ident(), 'yellow')
 
 
 class RouterSSH(_TenantRouterCmd):
