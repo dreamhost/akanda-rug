@@ -309,24 +309,39 @@ class RouterBatchedRebuild(command.Command):
         router, old_uuid = pop()
 
         while router and not RouterBatchedRebuild.THREAD_SHUTDOWN.is_set():
-            router = self.neutron.show_router(
-                router['id']).get('router', {})
-            server = self.get_instance(router)
-            if not server:  # VM exists
+            try:
+                time.sleep(1)
+                router = self.neutron.show_router(
+                    router['id']).get('router', {})
+                server = self.get_instance(router)
+                if not server:  # VM exists
+                    continue
+                if server.status != 'ACTIVE':  # VM is ACTIVE
+                    continue
+                changed = old_uuid != server.id
+                if not changed:  # VM uuid actually changed
+                    continue
+                if router['status'] != 'ACTIVE':  # Router is ACTIVE
+                    continue
+                self.cprint(
+                    "%s is ACTIVE, new VM is %s" % (router['id'], server.id),
+                    'green'
+                )
+                active.append(router)
+                router, old_uuid = pop()
+            except Exception as e:
+                self.cprint(
+                    'Thread %d encountered an error handling router %s: %s' % (
+                        thread.get_ident(),
+                        router['id'],
+                        str(e)
+                    ),
+                    'red'
+                )
+                # put the router back into the work queue so another healthy
+                # thread can grab it
+                queue.append(router)
                 continue
-            if server.status != 'ACTIVE':  # VM is ACTIVE
-                continue
-            changed = old_uuid != server.id
-            if not changed:  # VM uuid actually changed
-                continue
-            if router['status'] != 'ACTIVE':  # Router is ACTIVE
-                continue
-            self.cprint(
-                "%s is ACTIVE, new VM is %s" % (router['id'], server.id),
-                'green'
-            )
-            active.append(router)
-            router, old_uuid = pop()
 
         self.cprint('Thread %d is exiting...' % thread.get_ident(), 'yellow')
 
