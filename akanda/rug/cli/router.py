@@ -203,9 +203,10 @@ class RouterBatchedRebuild(command.Command):
 
         threads = self.spawn_threads(batch)
 
-        for chunk in RouterBatchedRebuild.chunked(
-            self.neutron.list_routers()['routers'], batch
-        ):
+        routers = self.neutron.list_routers()['routers']
+
+        for i, chunk in enumerate(RouterBatchedRebuild.chunked(routers,
+                                                               batch)):
             self.queue.clear()
             self.active.clear()
             rebooting = []
@@ -231,6 +232,9 @@ class RouterBatchedRebuild(command.Command):
                 self.app.run(['--debug', 'router', 'rebuild', router['id']])
 
             total = len(rebooting)
+            self.cprint(' '.join([
+                '-'*25, '%s / %s' % (i, len(routers)), '-'*25
+            ]), 'blue')
             self.cprint(
                 "Waiting on %s routers to become ACTIVE....<Ctrl-C to skip>" %
                 total,
