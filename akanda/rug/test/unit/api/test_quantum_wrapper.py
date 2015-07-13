@@ -254,8 +254,8 @@ class TestQuantumWrapper(unittest.TestCase):
 
         quantum_wrapper = quantum.Quantum(conf)
         quantum_wrapper.purge_management_interface()
-        driver.get_device_name.assert_called_once()
-        driver.unplug.assert_called_once()
+        self.assertEqual(driver.get_device_name.call_count, 1)
+        self.assertEqual(driver.unplug.call_count, 1)
 
     def test_clear_device_id(self):
         quantum_wrapper = quantum.Quantum(mock.Mock())
