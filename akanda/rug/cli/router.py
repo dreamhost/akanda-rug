@@ -205,12 +205,13 @@ class RouterBatchedRebuild(command.Command):
 
         routers = self.neutron.list_routers()['routers']
 
-        for i, chunk in enumerate(RouterBatchedRebuild.chunked(routers,
-                                                               batch)):
+        i = 0
+        for chunk in RouterBatchedRebuild.chunked(routers, batch):
             self.queue.clear()
             self.active.clear()
             rebooting = []
             for router in chunk:
+                i += 1
                 server = self.get_instance(router)
                 if not server:
                     self.cprint("No VM found for %s!" % router['id'], 'red')
