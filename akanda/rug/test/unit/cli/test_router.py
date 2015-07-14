@@ -4,6 +4,7 @@ import unittest
 
 import mock
 
+from akanda.rug import commands
 from akanda.rug.cli import app
 from akanda.rug.cli import router
 
@@ -13,7 +14,8 @@ class FunctionalTest(unittest.TestCase):
     def setUp(self):
         rug = namedtuple('rugcfg', [
             'admin_user', 'admin_password', 'admin_tenant_name', 'auth_url',
-            'auth_strategy', 'auth_region', 'router_image_uuid'
+            'auth_strategy', 'auth_region', 'router_image_uuid', 'amqp_url',
+            'outgoing_notifications_exchange'
         ])
 
         class RugController(app.RugController):
@@ -33,7 +35,9 @@ class FunctionalTest(unittest.TestCase):
                     'auth_url': 'http://locahost',
                     'auth_strategy': 'keystone',
                     'auth_region': 'default',
-                    'router_image_uuid': 'LATEST'
+                    'router_image_uuid': 'LATEST',
+                    'amqp_url': 'http://localhost',
+                    'outgoing_notifications_exchange': 'neutron'
                 })
 
         self.stdout = StringIO()
@@ -43,6 +47,7 @@ class FunctionalTest(unittest.TestCase):
         del self.app
 
 
+@mock.patch('time.sleep', lambda *a: None)
 class TestRouterBatchedRebuild(FunctionalTest):
 
     def setUp(self):
@@ -72,9 +77,14 @@ class TestRouterBatchedRebuild(FunctionalTest):
     @mock.patch.object(router.RouterBatchedRebuild, 'get_instance', lambda *a:
                        None)
     @mock.patch.object(router.RouterBatchedRebuild, 'neutron')
-    @mock.patch.object(router.RouterRebuild, 'take_action')
+    @mock.patch.object(router.RouterBatchedRebuild, 'rebuild_router')
     def test_router_vm_is_missing(self, rebuild, neutron):
-        r = {'id': '123', 'name': 'ak-456', 'status': 'ACTIVE'}
+        r = {
+            'id': '123',
+            'name': 'ak-456',
+            'status': 'ACTIVE',
+            'tenant_id': 'CUSTOMER1'
+        }
         neutron.list_routers.return_value = {'routers': [r]}
 
         with mock.patch.object(
@@ -104,9 +114,14 @@ class TestRouterBatchedRebuild(FunctionalTest):
     @mock.patch.object(router.RouterBatchedRebuild, 'get_instance', lambda *a:
                        mock.Mock(image={'id': 'OUT-OF-DATE'}))
     @mock.patch.object(router.RouterBatchedRebuild, 'neutron')
-    @mock.patch.object(router.RouterRebuild, 'take_action')
+    @mock.patch.object(router.RouterBatchedRebuild, 'rebuild_router')
     def test_router_out_of_date(self, rebuild, neutron):
-        r = {'id': '123', 'name': 'ak-456', 'status': 'ACTIVE'}
+        r = {
+            'id': '123',
+            'name': 'ak-456',
+            'status': 'ACTIVE',
+            'tenant_id': 'CUSTOMER1'
+        }
         neutron.list_routers.return_value = {'routers': [r]}
 
         with mock.patch.object(
@@ -187,3 +202,18 @@ class TestRouterBatchedRebuild(FunctionalTest):
         neutron.show_router.return_value = {'router': r}
         router.RouterBatchedRebuild(self.app, [], '').check_alive([r], deque())
         assert neutron.show_router.call_count == 10
+
+    def test_rebuild_router(self):
+        r = {'id': '123', 'name': 'ak-456', 'status': 'DOWN', 'tenant_id': 'X'}
+        with mock.patch('akanda.rug.notifications.Sender') as Sender:
+            Sender.return_value = mock.MagicMock()
+            router.RouterBatchedRebuild(self.app, [], '').rebuild_router(r)
+            sender = Sender.return_value.__enter__.return_value
+            sender.send.assert_called_once_with({
+                'event_type': 'akanda.rug.command',
+                'payload': {
+                    'command': commands.ROUTER_REBUILD,
+                    'router_id': '123',
+                    'tenant_id': 'X'
+                }
+            })
