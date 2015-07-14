@@ -30,6 +30,7 @@ import time
 from collections import namedtuple, deque
 
 from akanda.rug import commands
+from akanda.rug import notifications
 from akanda.rug.cli import message
 from akanda.rug.api import nova, quantum
 
@@ -230,7 +231,7 @@ class RouterBatchedRebuild(command.Command):
 
             self.queue.extend(rebooting)
             for router in rebooting:
-                self.app.run(['--debug', 'router', 'rebuild', router['id']])
+                self.rebuild_router(router)
 
             total = len(rebooting)
             self.cprint(' '.join([
@@ -349,6 +350,22 @@ class RouterBatchedRebuild(command.Command):
                 continue
 
         self.cprint('Thread %d is exiting...' % thread.get_ident(), 'yellow')
+
+    def rebuild_router(self, router):
+        msg = {
+            'event_type': 'akanda.rug.command',
+            'payload': {
+                'command': commands.ROUTER_REBUILD,
+                'router_id': router['id'],
+                'tenant_id': router['tenant_id']
+            }
+        }
+        with notifications.Sender(
+            amqp_url=self.app.rug_ini.amqp_url,
+            exchange_name=self.app.rug_ini.outgoing_notifications_exchange,  # noqa
+            topic='notifications.info',
+        ) as sender:
+            sender.send(msg)
 
 
 class RouterSSH(_TenantRouterCmd):
