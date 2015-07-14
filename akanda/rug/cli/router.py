@@ -334,7 +334,6 @@ class RouterBatchedRebuild(command.Command):
                     'green'
                 )
                 active.append(router)
-                router, old_uuid = pop()
             except Exception as e:
                 self.cprint(
                     'Thread %d encountered an error handling router %s: %s' % (
@@ -347,7 +346,7 @@ class RouterBatchedRebuild(command.Command):
                 # put the router back into the work queue so another healthy
                 # thread can grab it
                 queue.append(router)
-                continue
+            router, old_uuid = pop()
 
         self.cprint('Thread %d is exiting...' % thread.get_ident(), 'yellow')
 
