@@ -372,6 +372,13 @@ class TestCheckBootState(BaseTestStateCase):
             vm_manager.UP
         )
 
+    def test_transition_hotplug(self):
+        self._test_transition_hlpr(
+            event.UPDATE,
+            state.ReplugVM,
+            vm_manager.REPLUG
+        )
+
     def test_transition_vm_booting(self):
         self._test_transition_hlpr(
             event.UPDATE,
